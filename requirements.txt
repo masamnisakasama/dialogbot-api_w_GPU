@@ -1,0 +1,28 @@
+# --- Web API ---
+fastapi==0.116.1
+uvicorn==0.35.0
+httpx==0.28.1
+pydantic==2.11.7
+
+# --- Data / config ---
+sqlalchemy==2.0.43
+databases==0.9.0
+python-dotenv==1.1.1
+boto3==1.40.9
+
+# --- STT / LLM / NLP ---
+openai==1.99.9
+openai-whisper==20250625   # ★ 新しすぎて不安定なら 20231117 に下げる
+transformers==4.55.2
+sentence-transformers==5.1.0
+tiktoken==0.11.0
+torch==2.8.0
+
+# --- Audio utils ---
+ffmpeg-python==0.2.0
+librosa==0.11.0
+soundfile==0.13.1
+
+# --- Optional (必要なら) ---
+scikit-learn==1.7.1
+matplotlib==3.10.5
