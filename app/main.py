@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 # プロジェクト内モジュール
-from app.database import get_db
+from app.database import get_db, init_db
 from app import schemas, crud, features
 
 # ルーター群
@@ -39,6 +39,21 @@ app.add_middleware(
 app.include_router(stt_router)
 app.include_router(retrain_router)
 app.include_router(drift_router)
+
+# 追加：起動時にDB init（テーブルが無ければ作るとうまくいく可能性）
+@app.on_event("startup")
+def _startup():
+    init_db()
+
+class UpsertRequest(BaseModel):
+    text: str
+    speaker: str | None = None
+    top_k: int = 5
+
+class UpsertResponse(BaseModel):
+    id: int
+    similar: list[dict]
+
 
 # ===== 単発エンドポイント（必要最小限） =====
 class UpsertRequest(BaseModel):

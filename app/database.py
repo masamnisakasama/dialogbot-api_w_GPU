@@ -3,6 +3,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
+
+
+
 # 環境変数からデータベースURLを取得
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
@@ -25,3 +28,9 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# 本番はデータベースがinitiatedされていないので動かないっぽい
+def init_db():
+    # 重要：models を import してから create_all しないとテーブルが作られない
+    from app import models  # noqa: F401
+    Base.metadata.create_all(bind=engine)
