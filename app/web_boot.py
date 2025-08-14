@@ -61,14 +61,47 @@ _app.add_middleware(
     max_age=86400,
 )
 
-# すべての OPTIONS を 204 で即時返す（レスポンスは外側の CORS がヘッダ付与）
-class _PreflightMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        if request.method.upper() == "OPTIONS":
-            return Response(status_code=204)
-        return await call_next(request)
+from fastapi import Request
 
-_app.add_middleware(_PreflightMiddleware)
+def _normalize_origin(o: str) -> str:
+    o = o.strip()
+    return o[:-1] if o.endswith("/") else o
+
+_allowed = set(_normalize_origin(o) for o in (allow_origins if allow_origins != ["*"] else []))
+_allow_all = (allow_origins == ["*"])
+
+@_app.options("/{rest_of_path:path}", include_in_schema=False)
+async def _preflight_any(rest_of_path: str, request: Request):
+    origin = request.headers.get("origin", "")
+    req_headers = request.headers.get("access-control-request-headers", "content-type,x-user-id")
+    # 返すヘッダを組み立て
+    headers = {
+        "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+        "Access-Control-Allow-Headers": req_headers,
+        "Access-Control-Max-Age": "600",
+    }
+    if _allow_all:
+        headers["Access-Control-Allow-Origin"] = "*"
+        # "*" のときは credentials は付けない（仕様）
+    else:
+        if origin and _normalize_origin(origin) in _allowed:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Vary"] = "Origin"
+            if allow_credentials:
+                headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            # 許可外オリジン：ヘッダを付けず204返し（ブラウザがブロック）
+            pass
+    return Response(status_code=204, headers=headers)
+
+# すべての OPTIONS を 204 で即時返すミドルウェア（なぜかうまくいかず）
+# class _PreflightMiddleware(BaseHTTPMiddleware):
+#   async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+#        if request.method.upper() == "OPTIONS":
+#            return Response(status_code=204)
+#        return await call_next(request)
+#
+# _app.add_middleware(_PreflightMiddleware)
 
 # =========================
 # /stt-full の入出力を S3 に保存するミドルウェア
