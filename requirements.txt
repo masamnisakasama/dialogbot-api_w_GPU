@@ -26,3 +26,4 @@ soundfile==0.13.1
 # --- Optional (必要なら) ---
 scikit-learn==1.7.1
 matplotlib==3.10.5
+python-multipart
