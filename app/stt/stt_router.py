@@ -1,3 +1,4 @@
+# app/stt_router.py
 from __future__ import annotations
 
 import os
@@ -247,3 +248,12 @@ async def stt_full(
             os.remove(tmp_path)
         except Exception:
             pass
+
+@router.post("/stt-full")  # ← スラなしエイリアスを追加(意味あるかわからないけどバグ取れないので追加)
+async def stt_full_no_slash(
+    file: UploadFile = File(...),
+    detail: bool = Query(False),
+    user: str = Form("web-client"),
+):
+    # 既存の実装をそのまま呼び出す
+    return await stt_full(file=file, detail=detail, user=user)
