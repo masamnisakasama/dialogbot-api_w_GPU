@@ -1,3 +1,4 @@
+# app/whisper_utils.py
 from __future__ import annotations
 
 import io
@@ -7,6 +8,14 @@ import threading
 from pathlib import Path
 from typing import Optional, Union, List
 import whisper 
+
+import shutil
+def _ensure_ffmpeg():
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg not found on PATH. Install ffmpeg or use a Docker image that contains it."
+        )
+
 
 # MPS/GPU使ったらなんかうまくいかなかったので、使わずCPU固定
 DEVICE: str = "cpu"

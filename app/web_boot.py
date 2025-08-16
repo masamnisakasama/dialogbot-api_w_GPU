@@ -70,6 +70,17 @@ def _normalize_origin(o: str) -> str:
 _allowed = set(_normalize_origin(o) for o in (allow_origins if allow_origins != ["*"] else []))
 _allow_all = (allow_origins == ["*"])
 
+@_app.on_event("startup")
+async def _warm_whisper():
+    try:
+        import asyncio
+        from app.whisper_utils import get_model
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, get_model)
+        print("[startup] whisper model preloaded")
+    except Exception as e:
+        print("[startup] whisper preload failed:", e)
+
 @_app.options("/{rest_of_path:path}", include_in_schema=False)
 async def _preflight_any(rest_of_path: str, request: Request):
     origin = request.headers.get("origin", "")
