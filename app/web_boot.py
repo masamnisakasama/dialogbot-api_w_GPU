@@ -11,7 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=(Path(__file__).resolve().parent / ".env"))
 
-
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,13 +19,16 @@ import os, json, re, time
 from uuid import uuid4
 from typing import Callable, Awaitable, List, Dict
 
+# メインアプリ（profile / logic / stt / mlops などを登録済み）
 from app.main import app as _app
 
-# _appインポート後にルータを登録したあとに追加しないとエラー
+# 結果一覧APIを追加登録（メインアプリ読込後に行う）
 from app.results_router import router as results_router
 _app.include_router(results_router)
 
-# S3 ユーティリティ 関連
+# =========================
+# S3 ユーティリティ
+# =========================
 try:
     from app.s3_storage import put_bytes_user, put_text_user, put_json_user
     _S3_AVAILABLE = True
@@ -37,7 +39,7 @@ except Exception:
     def put_json_user(*a, **k): return None
 
 # =========================
-# CORS 設定 Renewed
+# CORS 設定
 # =========================
 def _normalize_origin(o: str) -> str:
     o = o.strip()
@@ -47,45 +49,45 @@ _raw = (os.getenv("CORS_ORIGINS") or os.getenv("ALLOWED_ORIGINS") or "*").strip(
 
 if _raw == "*":
     allow_origins = ["*"]
-    allow_credentials = False  # "*" を使う場合は必ず False
+    allow_credentials = False  # "*" と併用不可
 else:
     allow_origins = [_normalize_origin(o) for o in _raw.split(",") if o.strip()]
-    allow_credentials = True   # 具体オリジンは True
+    allow_credentials = True
 
 _app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=allow_credentials,
     allow_methods=["*"],
-    allow_headers=["*"],  # X-User-Id 等のカスタムヘッダも許可
+    allow_headers=["*"],  # X-User-Id 等も許可
     max_age=86400,
 )
-
-from fastapi import Request
-
-def _normalize_origin(o: str) -> str:
-    o = o.strip()
-    return o[:-1] if o.endswith("/") else o
 
 _allowed = set(_normalize_origin(o) for o in (allow_origins if allow_origins != ["*"] else []))
 _allow_all = (allow_origins == ["*"])
 
 @_app.on_event("startup")
 async def _warm_whisper():
+    """Whisper モデルのウォームアップ（失敗しても起動は続行）"""
     try:
         import asyncio
-        from app.whisper_utils import get_model
+        try:
+            # 正しい配置（app/stt/whisper_utils.py）
+            from app.stt.whisper_utils import get_model
+        except Exception:
+            # 互換（もし直下にある場合）
+            from app.whisper_utils import get_model  # type: ignore
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, get_model)
         print("[startup] whisper model preloaded")
     except Exception as e:
-        print("[startup] whisper preload failed:", e)
+        print("[startup] whisper preload skipped:", e)
 
+# すべてのパスのプリフライト応答
 @_app.options("/{rest_of_path:path}", include_in_schema=False)
 async def _preflight_any(rest_of_path: str, request: Request):
     origin = request.headers.get("origin", "")
     req_headers = request.headers.get("access-control-request-headers", "content-type,x-user-id")
-    # 返すヘッダを組み立て
     headers = {
         "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
         "Access-Control-Allow-Headers": req_headers,
@@ -93,32 +95,19 @@ async def _preflight_any(rest_of_path: str, request: Request):
     }
     if _allow_all:
         headers["Access-Control-Allow-Origin"] = "*"
-        # "*" のときは credentials は付けない（仕様）
     else:
         if origin and _normalize_origin(origin) in _allowed:
             headers["Access-Control-Allow-Origin"] = origin
             headers["Vary"] = "Origin"
             if allow_credentials:
                 headers["Access-Control-Allow-Credentials"] = "true"
-        else:
-            # 許可外オリジン：ヘッダを付けず204返し（ブラウザがブロック）
-            pass
     return Response(status_code=204, headers=headers)
 
-# すべての OPTIONS を 204 で即時返すミドルウェア（なぜかうまくいかず）
-# class _PreflightMiddleware(BaseHTTPMiddleware):
-#   async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-#        if request.method.upper() == "OPTIONS":
-#            return Response(status_code=204)
-#        return await call_next(request)
-#
-# _app.add_middleware(_PreflightMiddleware)
-
 # =========================
-# /stt-full の入出力を S3 に保存するミドルウェア
+# /stt-full I/O を S3 保存するミドルウェア
 # =========================
-TARGET_PATHS = {"/stt-full", "/stt-full/"}
-USER_HEADER  = "x-user-id"
+TARGET_PATHS = {"/stt-full", "/stt-full/"}  # どちらにも対応
+USER_HEADER = "x-user-id"
 
 class STTS3Middleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -129,12 +118,14 @@ class STTS3Middleware(BaseHTTPMiddleware):
 
         body = await request.body()
         try:
+            # 下流でも body を読めるようにする（FastAPI内部仕様につき自己責任）
             request._body = body  # type: ignore[attr-defined]
         except Exception:
             pass
 
         response = await call_next(request)
 
+        # レスポンスを取り出し（StreamingResponse の場合は吸い上げて包み直す）
         resp_bytes = b""
         try:
             if isinstance(response, StreamingResponse) and not isinstance(response, JSONResponse):
@@ -151,6 +142,7 @@ class STTS3Middleware(BaseHTTPMiddleware):
         except Exception:
             pass
 
+        # S3 保存（ベストエフォート）
         if _S3_AVAILABLE:
             try:
                 date_prefix = time.strftime("%Y/%m/%d")
@@ -189,60 +181,14 @@ class STTS3Middleware(BaseHTTPMiddleware):
 _app.add_middleware(STTS3Middleware)
 
 # =========================
-# /analyze-logic　既存が無い場合の補助で、ヒューリスティック的なやつ
+# 重要: /analyze-logic の“簡易版”は定義しない
+# （app.main で include_router(logic_router) 済みの本来版を使う）
 # =========================
-def _split_sentences_ja(text: str) -> List[str]:
-    return [s.strip() for s in re.split(r"[。\n!?]+", text) if s.strip()]
-
-def _score_logic(text: str) -> Dict:
-    t = (text or "").strip()
-    if not t:
-        return {"total": 0.0, "scores": {k: 0 for k in ["clarity","consistency","cohesion","density","cta"]},
-                "outline": [], "advice": []}
-
-    sents = _split_sentences_ja(t)
-    chars = len(t)
-
-    has_intro = bool(re.search(r"(結論|要点|本日|今日は|概要|ポイント)", t[:min(160, len(t))]))
-    has_cta = bool(re.search(r"(ご連絡|ご返信|予約|デモ|お申し込み|お願いします|お問い合わせ|クリック|こちら)", t[-min(260, len(t)):]))
-    transitions = len(re.findall(r"(まず|次に|一方で|つまり|結果として|ただし|なお)", t))
-    numbers = len(re.findall(r"\d+", t))
-    headings = len(re.findall(r"^\s*[■#・\-・\*・●]", t, flags=re.M))
-
-    clip = lambda x: max(0.0, min(100.0, float(x)))
-    scores = {
-        "clarity":     clip(60 + (20 if has_intro else 0) + min(20, headings*5)),
-        "consistency": clip(55 + min(25, max(0, numbers - 1) * 5)),
-        "cohesion":    clip(50 + min(30, transitions * 6)),
-        "density":     clip(50 + min(35, int((numbers + (chars/400)) * 3))),
-        "cta":         clip(50 + (30 if has_cta else 0)),
-    }
-    total = round(sum(scores.values()) / 5, 1)
-
-    paras = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
-    outline = []
-    for p in paras[:8]:
-        first = _split_sentences_ja(p[:200])
-        if first:
-            outline.append(first[0][:60])
-
-    advice = []
-    if scores["clarity"] < 70: advice.append("冒頭に『結論→要点』を置くと明瞭さが上がります。")
-    if scores["cohesion"] < 70: advice.append("段落の接続語（まず/次に/つまり/結果として）を増やすと流れが滑らかです。")
-    if scores["cta"] < 65:     advice.append("最後に次アクション（ご連絡/予約/返信依頼など）を明示しましょう。")
-
-    return {"total": total, "scores": scores, "outline": outline, "advice": advice}
-
-@_app.post("/analyze-logic")
-async def analyze_logic(req: Request):
-    data = await req.json()
-    text = (data or {}).get("text", "") or ""
-    return JSONResponse(_score_logic(text))
 
 # 公開アプリ
 app: FastAPI = _app
 
-# 直接起動用
+# 直接起動用（ローカル実行時）
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8015"))
