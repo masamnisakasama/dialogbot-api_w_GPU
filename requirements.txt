@@ -13,6 +13,7 @@ boto3==1.40.9
 # --- STT / LLM / NLP ---
 openai==1.99.9
 openai-whisper==20250625   # ★ 新しすぎて不安定なら 20231117 に下げる
+faster-whisper==1.0.3 # GPUと相性よくより速い
 transformers==4.55.2
 sentence-transformers==5.1.0
 tiktoken==0.11.0

@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dialogbot-api-w-gpu-ing
+  namespace: dialogbot-gpu
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    cloud.google.com/backend-config: '{"default": "dialogbot-api-w-gpu-bec"}'
+    # 既存のグローバル静的IPやマネージド証明書を使う場合は以下を有効化
+    # kubernetes.io/ingress.global-static-ip-name: "dialogbot-api-w-gpu-ip"
+    # networking.gke.io/managed-certificates: "dialogbot-api-w-gpu-cert"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dialogbot-api-w-gpu-svc
+                port:
+                  number: 80

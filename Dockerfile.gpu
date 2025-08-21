@@ -1,0 +1,30 @@
+# Dockerfile.gpu
+FROM nvidia/cuda:12.2.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# 必要ランタイム
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip \
+    ffmpeg libsndfile1 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 依存インストール（python3.11だとavとffmpegが衝突してコケることはない、多分）
+COPY requirements.txt .
+RUN python3.11 -m pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# アプリ本体
+COPY . .
+
+# 既定は GPU + faster-whisper + turbo
+ENV HOST=0.0.0.0 PORT=8080 \
+    USE_GPU=1 FASTER_WHISPER=1 \
+    WHISPER_MODEL=h2oai/faster-whisper-large-v3-turbo \
+    COMPUTE_TYPE=float16
+
+EXPOSE 8080
+CMD ["bash","-lc","uvicorn app.main:app --host ${HOST} --port ${PORT} --workers 1"]

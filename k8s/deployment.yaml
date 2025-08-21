@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dialogbot-api-w-gpu
+  namespace: dialogbot-gpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dialogbot-api-w-gpu
+  template:
+    metadata:
+      labels:
+        app: dialogbot-api-w-gpu
+    spec:
+      containers:
+        - name: api
+          image: REGION-docker.pkg.dev/PROJECT_ID/REPO_NAME/dialogbot-api-w-gpu:TAG
+          ports:
+            - containerPort: 8080
+          env:
+            # ==== STT/GPU ====
+            - { name: USE_GPU,        value: "1" }
+            - { name: FASTER_WHISPER, value: "1" }
+            - { name: WHISPER_MODEL,  value: "h2oai/faster-whisper-large-v3-turbo" }
+            - { name: COMPUTE_TYPE,   value: "float16" }
+
+            # ==== App ====
+            - { name: OPENAI_MODEL, value: "gpt-4o-mini" }
+            - { name: PROFILE_MIN_CHARS, value: "10" }
+            - { name: PROFILE_DEDUP_EXACT, value: "1" }
+            - { name: PROFILE_ALLOWED_LANGS, value: "ja,en" }
+            - name: LOGIC_CALIB_POINTS
+              value: '{"global":[[0,0],[60,60],[75,78],[85,90],[92,96],[100,100]]}'
+
+            # ==== S3（現状維持）====
+            - { name: AWS_REGION,  value: "us-east-1" }
+            - { name: S3_BUCKET,   value: "continuous-dialogbot" }
+            - { name: S3_PREFIX,   value: "app/" }
+            - { name: S3_SSE,      value: "AES256" }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: s3-credentials, key: aws_access_key_id } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: s3-credentials, key: aws_secret_access_key } }
+
+            # ==== CORS ====
+            - name: CORS_ORIGINS
+              value: "https://roaring-pavlova-76f278.netlify.app,https://snazzy-profiterole-cba9bf.netlify.app,http://localhost:3000"
+
+            # ==== OpenAI ====
+            - name: OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: openai, key: api_key } }
+
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "4"
+              memory: "16Gi"
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 25
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 60
+            periodSeconds: 10

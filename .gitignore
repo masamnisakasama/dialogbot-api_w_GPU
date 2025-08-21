@@ -1,6 +1,30 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-*.db
-.env
+*.py[cod]
+*.egg-info/
+*.egg
+*.log
+
+# Virtual env / build
+.venv/
+.dialogbot-GPU/
+dialogbot-GPU/          
+env/
+build/
+dist/
+
+# OS / IDE
 .DS_Store
+.idea/
+.vscode/
+
+# Local data / artifacts
+*.wav
+*.aiff
+*.mp3
+test.db
+
+# Secrets
+.env
+.env.*        
+*.secret

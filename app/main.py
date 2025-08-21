@@ -26,11 +26,12 @@ from app.logic_router import router as logic_router
 app = FastAPI(title="Dialog Bot API")
 app.include_router(profile_router)
 app.include_router(logic_router, prefix="") 
+
 # ===== ミドルウェア =====
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],         # 本番はフロントのオリジンに絞ってください
-    allow_credentials=True,
+    allow_origins=origins,         
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,6 +66,8 @@ class UpsertResponse(BaseModel):
     id: int
     similar: list[dict]  # {id, user, message, similarity}
 
+# 現在使っていないが、MLOps拡張に必要となる可能性(本当？)
+
 @app.post("/conversations/upsert_and_search", response_model=UpsertResponse)
 def upsert_and_search(body: UpsertRequest, db: Session = Depends(get_db)):
     """
@@ -95,6 +98,7 @@ def upsert_and_search(body: UpsertRequest, db: Session = Depends(get_db)):
     )
     return UpsertResponse(id=saved.id, similar=sims)
 
+# healthcheck
 @app.get("/health")
 def health():
     return {"status": "ok"}

@@ -5,27 +5,6 @@ import numpy as np
 
 from app import models, schemas
 
-"""
-def create_conversation(
-    db: Session,
-    conv: schemas.ConversationCreate,
-    style: Optional[str],
-    embedding: bytes,
-    sentiment: Optional[str] = None,
-):
-    obj = models.Conversation(
-        user=conv.user,
-        message=conv.message,
-        style=style,
-        embedding=embedding,   # BLOB
-        sentiment=sentiment,
-    )
-    db.add(obj)
-    db.commit()
-    db.refresh(obj)
-    return obj
-"""
-
 def create_conversation(
     db: Session,
     conv: schemas.ConversationCreate,
