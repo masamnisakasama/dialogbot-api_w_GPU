@@ -1,5 +1,9 @@
-# Dockerfile.gpu
-FROM nvidia/cuda:12.2.0-cudnn-runtime-ubuntu22.04
+
+# Dockerfile.gpu（ビルドできず）
+# FROM nvidia/cuda:12.2.0-cudnn-runtime-ubuntu22.04
+
+# 置き換え(cudnn8に)
+FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
