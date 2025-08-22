@@ -12,7 +12,7 @@ boto3==1.40.9
 
 # --- STT / LLM / NLP ---
 openai==1.99.9
-openai-whisper==20250625   # ★ 新しすぎて不安定なら 20231117 に下げる
+openai-whisper==20250625   # 新しすぎて不安定なら 20231117 に下げる
 faster-whisper==1.0.3 # GPUと相性よくより速い
 transformers==4.55.2
 sentence-transformers==5.1.0
@@ -28,3 +28,7 @@ soundfile==0.13.1
 scikit-learn==1.7.1
 matplotlib==3.10.5
 python-multipart
+
+# --- よく見たら揮発性のSQLite使ってたのでPostgres 移行したい ---
+scikit-learn==1.7.1
+psycopg2-binary>=2.9

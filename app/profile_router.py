@@ -23,7 +23,8 @@ def ingest(
 @router.get("/snapshot")
 def snapshot(
     user_id: str = Query(...),
-    days: int = Query(30)
+    # 7日に変更した
+    days: int = Query(7)
 ) -> Dict[str, Any]:
     # App.js は top-level の style/mood/interest を読む
     return get_snapshot(user_id, days)

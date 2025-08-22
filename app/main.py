@@ -27,6 +27,16 @@ app = FastAPI(title="Dialog Bot API")
 app.include_router(profile_router)
 app.include_router(logic_router, prefix="") 
 
+#　web_boot.pyのallow_origins=allow_originsでコケないため
+raw = os.getenv("CORS_ORIGINS", "").strip()
+if raw in ("*", "wildcard", "WILDCARD"):
+    origins = ["*"]
+else:
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+if not origins:
+    # 開発
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000","https://roaring-pavlova-76f278.netlify.app"]
+
 # ===== ミドルウェア =====
 app.add_middleware(
     CORSMiddleware,

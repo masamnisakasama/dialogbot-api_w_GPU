@@ -1,28 +1,20 @@
-# Git
+
 .git
-.gitignore
-
-# Python venv（名前が何でも除外）
-.venv/
-venv/
-env/
-dialogbot-GPU/
-.dialogbot-GPU/
-
-# OS / IDE
-.DS_Store
-.vscode/
-.idea/
-
-# Build artifacts
 __pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
+*.pyc
+*.pyo
+*.log
+.DS_Store
 
-# Local data
-test.db
-*.wav
-*.aiff
-*.mp3
+# ローカル環境 & DB
+.venv*/
+dialogbot-GPU/
+dev.db*
+test.db*
+*.sqlite*
+*.db-wal
+*.db-shm
+
+# その他ビルド不要物(GKEデプロイしないならk8sいらない)
+node_modules/
+k8s/

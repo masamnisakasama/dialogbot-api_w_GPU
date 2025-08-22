@@ -6,7 +6,7 @@ __pycache__/
 *.log
 
 # Virtual env / build
-.venv/
+.venv311/
 .dialogbot-GPU/
 dialogbot-GPU/          
 env/
@@ -28,3 +28,10 @@ test.db
 .env
 .env.*        
 *.secret
+
+# ローカルDB・アーティファクト
+dev.db*
+test.db*
+*.sqlite*
+*.db-wal
+*.db-shm

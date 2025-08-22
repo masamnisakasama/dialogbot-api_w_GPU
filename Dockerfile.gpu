@@ -32,3 +32,59 @@ ENV HOST=0.0.0.0 PORT=8080 \
 
 EXPOSE 8080
 CMD ["bash","-lc","uvicorn app.main:app --host ${HOST} --port ${PORT} --workers 1"]
+
+
+# Dockerfile.gpu（ビルドできず）
+# FROM nvidia/cuda:12.2.0-cudnn-runtime-ubuntu22.04
+
+# 置き換え(cudnn8に)
+FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# 必要パッケージ
+# - python3 / venv / pip（OS標準の3.x：jammyは 3.10 系で安定）
+# - ffmpeg と 音声ライブラリ
+# - PyAV をビルドする場合に必要な dev ヘッダ一式 + ビルドツール
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv python3-pip \
+    ffmpeg libsndfile1 ca-certificates \
+    build-essential pkg-config \
+    libavformat-dev libavdevice-dev libavcodec-dev libavutil-dev \
+    libswscale-dev libavfilter-dev libswresample-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 依存インストール：常に interpreter 経由でpipを叩く
+COPY requirements.txt .
+RUN python3 -m pip install --upgrade pip wheel \
+ && python3 -m pip install --no-cache-dir -r requirements.txt
+
+# アプリ本体
+COPY app ./app
+
+# 既定の環境（必要に応じて上書き）
+ENV HOST=0.0.0.0 \
+    PORT=8080 \
+    APP_ENV=production \
+    # 本番×SQLiteの誤用防止（外部DB未設定なら本番時に気づくように設定）
+    BLOCK_SQLITE_IN_PROD=true \
+    SQLITE_PATH=/tmp/app.db \
+    # Faster-Whisper / GPU を使うために
+    USE_GPU=1 \
+    FASTER_WHISPER=1 \
+    WHISPER_MODEL=h2oai/faster-whisper-large-v3-turbo \
+    COMPUTE_TYPE=float16 \
+    UVICORN_WORKERS=1
+
+EXPOSE 8080
+
+# web_boot を使うならこっち
+CMD ["python3", "-m", "app.web_boot"]
+
+# 直接uvicorn起動にしたい場合はコメントアウトを抜く
+# CMD ["bash","-lc","uvicorn app.main:app --host ${HOST} --port ${PORT} --workers ${UVICORN_WORKERS}"]
