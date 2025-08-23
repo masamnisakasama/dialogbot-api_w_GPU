@@ -4,6 +4,6 @@
 現在Cloud runをデプロイして機能をカールで確かめている段階です。ヘルスチェックには200が返ってきますが、STT系のAPIを叩くと500が返ってくるのでそこでかなり詰まっています。原因を切り分け中です。
 
 
-<img width="721" height="271" alt="Screenshot 2025-08-23 at 12 43 59" src="https://github.com/user-attachments/assets/bbc0bd4c-fe19-49ec-a05f-2a74c2c4f385" />
+<img width="721" height="271" alt="Screenshot 2025-08-23 at 12 43 59" src="https://github.com/user-attachments/assets/bbc0bd4c-fe19-49ec-a05f-2a74c2c4f385" /><br>
 上がヘルスチェックで200、下がカールでFast APIのAPIに音声を投げて500になっている部分です。
 今回GPUと相性の良いfaster-whisperを導入したのですが、それも原因かもしれません。
