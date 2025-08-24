@@ -1,271 +1,105 @@
-# app/whisper_utils.py
 from __future__ import annotations
-
-import io
-import os
-import tempfile
-import threading
+import io, os, tempfile, threading, shutil
 from pathlib import Path
 from typing import Optional, Union, List
+import whisper, torch
 
-import shutil
-import whisper 
-# バグると怖いのでローカルだと既存の OpenAI Whisper を温存
-# MacOSでGPU動かせないので、本番は「頼む通ってくれ」と願うことしかできない
+print(f"[whisper_utils HOTFIX] file={__file__} torch={torch.__version__} cuda_avail={torch.cuda.is_available()}")
 
-# ───────────────────────────────────────────────────────────────────
-# 使い方
-#  - ローカルではFASTER_WHISPER=0でwhisper/本番はFASTER_WHISPER=1でfaster-whisper
-#  - 悲しいことにMacのGPUは使えないのでローカルはCPU
-#  - ローカル(CPU): USE_GPU=0, FASTER_WHISPER=0, WHISPER_MODEL=small, COMPUTE_TYPE=int8
-#  - GKE(GPU): USE_GPU=1, FASTER_WHISPER=1, WHISPER_MODEL=medium, COMPUTE_TYPE=float16
-#   ※ FASTER_WHISPER を設定しない場合は USE_GPU=1 なら自動で faster-whisper 
-# ───────────────────────────────────────────────────────────────────
+def _env_true(name: str, default: bool=False)->bool:
+    v=os.getenv(name); 
+    return default if v is None else v.strip().lower() in ("1","true","yes","on")
 
-def _env_true(name: str, default: bool = False) -> bool:
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return v.strip().lower() in ("1", "true", "yes", "on")
+USE_GPU=_env_true("USE_GPU", True)
+ENV_MODEL=(os.getenv("WHISPER_MODEL","turbo") or "turbo").lower()
+DEFAULT_CANDIDATES=["small","base","tiny"]
+MODEL=ENV_MODEL
+MAX_UPLOAD_MB=float(os.getenv("WHISPER_MAX_UPLOAD_MB","200"))
 
-USE_GPU = _env_true("USE_GPU", False)
-# デフォルト: GPUなら faster-whisper、CPUなら  Whisper
-USE_FASTER = _env_true("FASTER_WHISPER", USE_GPU)
+# GPU専用：CUDAなければ即失敗して気づく
+if USE_GPU and not torch.cuda.is_available():
+    raise RuntimeError("GPU_ONLY: USE_GPU=1 だが CUDA を利用できません（GPUなし or CPU版PyTorch）")
 
-# モデル名
-ENV_MODEL = os.getenv("WHISPER_MODEL", "").strip()
-DEFAULT_CANDIDATES: List[str] = ["small", "base", "tiny"]
-# GPU ならturboを既定、CPUはmediumを既定に
-DEFAULT_MODEL = "turbo" if USE_GPU else "medium"
-MODEL = ENV_MODEL or DEFAULT_MODEL
-
-# CPU/GPU 共通の制限
-MAX_UPLOAD_MB = float(os.getenv("WHISPER_MAX_UPLOAD_MB", "50"))
-
-# OpenAI Whisper 用の推論設定　既存を置いておく
-TRANSCRIBE_KW = dict(
-    temperature=0.0,
-    beam_size=1,
-    best_of=1,
-    condition_on_previous_text=False,
-    word_timestamps=False,
-    fp16=False,  # CPUなので fp16 は無効（OpenAI Whisper 経路でのみ使用）
+_DEVICE="cuda" if (USE_GPU and torch.cuda.is_available()) else "cpu"
+TRANSCRIBE_KW=dict(
+  temperature=0.0, beam_size=1, best_of=1,
+  condition_on_previous_text=False, word_timestamps=False,
+  fp16=(_DEVICE=="cuda"),
 )
 
-# faster-whisper 用（GPU で有効化推奨）
-COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "float16" if USE_GPU else "int8")
-CPU_THREADS = int(os.getenv("CPU_THREADS", "4"))
-NUM_WORKERS = int(os.getenv("WHISPER_WORKERS", "1"))
+_model=None; _lock=threading.Lock()
 
-# 実装切替フラグ
-_USE_FASTER_EFFECTIVE = False
-try:
-    if USE_FASTER:
-        from faster_whisper import WhisperModel as FWModel  # type: ignore
-        _USE_FASTER_EFFECTIVE = True
-except Exception as _e:
-    # faster-whisperが未インストールとか読み込み失敗 → 既存WhisperでFB
-    _USE_FASTER_EFFECTIVE = False
+def _filesize_mb(p: Union[str,Path])->float:
+    p=Path(p); return p.stat().st_size/(1024*1024)
 
+def _to_temp_audio_file(data: Union[bytes, io.BufferedReader, io.BytesIO, str, Path], suffix=".wav")->str:
+    if isinstance(data,(str,Path)):
+        p=Path(data); 
+        if not p.exists(): raise FileNotFoundError(p)
+        if _filesize_mb(p)>MAX_UPLOAD_MB: raise ValueError(f"Audio too large (> {MAX_UPLOAD_MB} MB)")
+        return str(p)
+    fd,tmp=tempfile.mkstemp(suffix=suffix,prefix="whisper_"); os.close(fd)
+    try:
+        with open(tmp,"wb") as f:
+            if isinstance(data,(io.BufferedReader,io.BytesIO)): f.write(data.read())
+            elif isinstance(data,(bytes,bytearray)): f.write(data)
+            else: raise TypeError(type(data))
+    except Exception:
+        try: os.remove(tmp)
+        except Exception: pass
+        raise
+    if _filesize_mb(tmp)>MAX_UPLOAD_MB:
+        try: os.remove(tmp)
+        except Exception: pass
+        raise ValueError(f"Audio too large (> {MAX_UPLOAD_MB} MB)")
+    return tmp
 
 def _ensure_ffmpeg():
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            "ffmpeg not found on PATH. Install ffmpeg or use a Docker image that contains it."
-        )
+        raise RuntimeError("ffmpeg not found on PATH")
 
-# ===== OpenAI Whisper (従来) =====
-_DEVICE_OPENAI: str = "cpu"
-_model_openai = None
-_model_name_openai: Optional[str] = None
-_model_lock_openai = threading.Lock()
+def _load_model():
+    global _model
+    if _model is not None: return _model
+    with _lock:
+        if _model is not None: return _model
+        candidates=[MODEL]+[m for m in DEFAULT_CANDIDATES if m!=MODEL]
+        last=None
+        for name in candidates:
+            try:
+                m=whisper.load_model(name, device=_DEVICE)
+                try: param_dev=next(m.parameters()).device.type
+                except Exception: param_dev=_DEVICE
+                print(f"[whisper_utils HOTFIX] Loaded '{name}' on {_DEVICE} (param_device={param_dev})")
+                if _DEVICE=="cuda" and param_dev!="cuda":
+                    raise RuntimeError(f"Expected CUDA but got {param_dev}")
+                _model=m; return m
+            except Exception as e:
+                print(f"[whisper_utils HOTFIX] Failed to load '{name}': {e}"); last=e
+        raise RuntimeError(f"Failed to load model. Tried {candidates}. Last: {last}")
 
-def _load_model_with_fallback_openai():
-    global _model_openai, _model_name_openai
-    if _model_openai is not None:
-        return
-    candidates: List[str] = (
-        [ENV_MODEL] + [m for m in DEFAULT_CANDIDATES if m != ENV_MODEL]
-        if ENV_MODEL else DEFAULT_CANDIDATES
-    )
-    last_err: Optional[Exception] = None
-    for name in candidates:
-        try:
-            local = whisper.load_model(name, device=_DEVICE_OPENAI)
-            _model_openai = local
-            _model_name_openai = name
-            print(f"[whisper_utils] Loaded OpenAI-Whisper '{name}' on cpu.")
-            return
-        except Exception as e:
-            print(f"[whisper_utils] Failed to load '{name}' on cpu: {e}")
-            last_err = e
-            continue
-    raise RuntimeError(f"Failed to load Whisper model. Tried: {candidates}. Last error: {last_err}")
-
-def _get_openai_model():
-    global _model_openai
-    if _model_openai is not None:
-        return _model_openai
-    with _model_lock_openai:
-        if _model_openai is not None:
-            return _model_openai
-        _load_model_with_fallback_openai()
-        return _model_openai
-
-# ===== faster-whisper (GPU/CPU) =====
-_model_fw = None
-_model_lock_fw = threading.Lock()
-
-def _get_fw_model():
-    global _model_fw
-    if _model_fw is not None:
-        return _model_fw
-    with _model_lock_fw:
-        if _model_fw is not None:
-            return _model_fw
-        # 初回ロード
-        _model_fw = FWModel(
-            MODEL,
-            device=("cuda" if USE_GPU else "cpu"),
-            compute_type=COMPUTE_TYPE,
-            cpu_threads=CPU_THREADS,
-            num_workers=NUM_WORKERS,
-        )
-        print(f"[whisper_utils] Loaded faster-whisper '{MODEL}' on "
-              f"{'cuda' if USE_GPU else 'cpu'} ({COMPUTE_TYPE}).")
-        return _model_fw
-
-# 互換 expose（古いコードが whisper_utils.model を参照しても壊れにくく）
-model = None  # get_model() 呼び出し後に実体をセットする
-
-def get_model_name() -> Optional[str]:
-    # どちらの実装でも MODEL 名を返す
+def get_model_name()->Optional[str]:
     return MODEL
 
-def _filesize_mb(path: Union[str, Path]) -> float:
-    p = Path(path)
-    return p.stat().st_size / (1024 * 1024)
-
-def _to_temp_audio_file(
-    data: Union[bytes, io.BufferedReader, io.BytesIO, str, Path],
-    suffix: str = ".wav",
-) -> str:
-    """file-like/bytes/パス いずれも受け取り、一時ファイルのパスを返す。"""
-    if isinstance(data, (str, Path)):
-        p = Path(data)
-        if not p.exists():
-            raise FileNotFoundError(f"Audio file not found: {p}")
-        if _filesize_mb(p) > MAX_UPLOAD_MB:
-            raise ValueError(f"Audio file too large (> {MAX_UPLOAD_MB} MB).")
-        return str(p)
-
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="whisper_")
-    os.close(fd)
-    try:
-        with open(tmp_path, "wb") as f:
-            if isinstance(data, (io.BufferedReader, io.BytesIO)):
-                f.write(data.read())
-            elif isinstance(data, (bytes, bytearray)):
-                f.write(data)
-            else:
-                raise TypeError(f"Unsupported audio data type: {type(data)}")
-    except Exception:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
-        raise
-
-    if _filesize_mb(tmp_path) > MAX_UPLOAD_MB:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
-        raise ValueError(f"Audio file too large (> {MAX_UPLOAD_MB} MB).")
-
-    return tmp_path
-
-# ===== 共通 API: get_model / transcribe_* =====
-
 def get_model():
-    """
-    互換API。どちらの実装でも model を返す。
-    """
-    global model
-    if _USE_FASTER_EFFECTIVE:
-        mdl = _get_fw_model()
-    else:
-        mdl = _get_openai_model()
-    model = mdl
-    return mdl
+    return _load_model()
 
-def transcribe_audio(
-    file_like_or_path: Union[bytes, io.BufferedReader, io.BytesIO, str, Path],
-    *,
-    language: Optional[str] = "ja",
-    initial_prompt: Optional[str] = None,
-) -> str:
-    mdl = get_model()
-    tmp = _to_temp_audio_file(file_like_or_path, suffix=".wav")
+def transcribe_audio(file_like_or_path, *, language: Optional[str]="ja", initial_prompt: Optional[str]=None)->str:
+    mdl=_load_model(); tmp=_to_temp_audio_file(file_like_or_path,".wav")
     try:
-        if _USE_FASTER_EFFECTIVE:
-            segs, info = mdl.transcribe(
-                tmp, language=language, vad_filter=True, initial_prompt=initial_prompt
-            )
-            return "".join(s.text for s in segs).strip()
-        else:
-            _ensure_ffmpeg()
-            result = mdl.transcribe(
-                tmp,
-                language=language,
-                initial_prompt=initial_prompt or "",
-                **TRANSCRIBE_KW,
-            )
-            return (result or {}).get("text", "").strip()
+        _ensure_ffmpeg()
+        r=mdl.transcribe(tmp, language=language, initial_prompt=initial_prompt or "", **TRANSCRIBE_KW) or {}
+        return (r or {}).get("text","").strip()
     finally:
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
+        try: os.remove(tmp)
+        except Exception: pass
 
-def transcribe_with_segments(
-    file_like_or_path: Union[bytes, io.BufferedReader, io.BytesIO, str, Path],
-    *,
-    language: Optional[str] = "ja",
-    initial_prompt: Optional[str] = None,
-) -> dict:
-    """
-    Whisper の結果を { text, segments, duration, language, model } 形式で返す。
-    既存の stt_router.py が期待する形に合わせている。
-    """
-    mdl = get_model()
-    tmp = _to_temp_audio_file(file_like_or_path, suffix=".wav")
+def transcribe_with_segments(file_like_or_path, *, language: Optional[str]="ja", initial_prompt: Optional[str]=None)->dict:
+    mdl=_load_model(); tmp=_to_temp_audio_file(file_like_or_path,".wav")
     try:
-        if _USE_FASTER_EFFECTIVE:
-            segs, info = mdl.transcribe(
-                tmp, language=language, vad_filter=True, initial_prompt=initial_prompt
-            )
-            segments = [{"start": s.start, "end": s.end, "text": s.text} for s in segs]
-            text = "".join(s["text"] for s in segments).strip()
-            return {
-                "text": text,
-                "segments": segments,
-                "duration": getattr(info, "duration", None),
-                "language": getattr(info, "language", language),
-                "model": MODEL,
-            }
-        else:
-            _ensure_ffmpeg()
-            result = mdl.transcribe(
-                tmp,
-                language=language,
-                initial_prompt=initial_prompt or "",
-                **TRANSCRIBE_KW,
-            ) or {}
-            # OpenAI Whisper の result は { "text": ..., "segments": [...] } の形
-            return result
+        _ensure_ffmpeg()
+        r=mdl.transcribe(tmp, language=language, initial_prompt=initial_prompt or "", **TRANSCRIBE_KW) or {}
+        return r
     finally:
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
+        try: os.remove(tmp)
+        except Exception: pass
