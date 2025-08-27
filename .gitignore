@@ -12,11 +12,14 @@ dialogbot-GPU/
 env/
 build/
 dist/
+.venv
+**/.env
 
 # OS / IDE
 .DS_Store
 .idea/
 .vscode/
+**/.DS_Store
 
 # Local data / artifacts
 *.wav

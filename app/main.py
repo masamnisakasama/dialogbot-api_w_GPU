@@ -113,6 +113,11 @@ def upsert_and_search(body: UpsertRequest, db: Session = Depends(get_db)):
 def health():
     return {"status": "ok"}
 
+# 一応healthzも入れておくわ
+@app.get("/healthz", tags=["meta"])
+def healthz():
+    return {"ok": True}
+
 # ===== ログ設定（任意） =====
 logging.basicConfig(level=logging.INFO)
 
