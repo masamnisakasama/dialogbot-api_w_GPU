@@ -38,3 +38,4 @@ test.db*
 *.sqlite*
 *.db-wal
 *.db-shm
+drift_ref.json

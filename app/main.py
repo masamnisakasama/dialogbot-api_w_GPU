@@ -21,7 +21,7 @@ from app.mlops.retrain_api import router as retrain_router    # /mlops/retrain
 from app.mlops.drift_router import router as drift_router     # /drift/rebase, /drift/status
 from app.profile_router import router as profile_router
 from app.logic_router import router as logic_router
-
+from app.mlops.automation_router import router as automation_router
 # ===== アプリ生成（ここだけで作る） =====
 app = FastAPI(title="Dialog Bot API")
 app.include_router(profile_router)
@@ -50,6 +50,7 @@ app.add_middleware(
 app.include_router(stt_router)
 app.include_router(retrain_router)
 app.include_router(drift_router)
+app.include_router(automation_router)
 
 # 追加：起動時にDB init（テーブルが無ければ作るとうまくいく可能性）
 @app.on_event("startup")

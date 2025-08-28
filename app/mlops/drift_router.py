@@ -19,6 +19,8 @@ PSI_SEV_LOW = float(os.getenv("DRIFT_PSI_SEV_LOW", "0.10"))
 PSI_SEV_HIGH = float(os.getenv("DRIFT_PSI_SEV_HIGH", "0.25"))
 SHIFT_SEV_LOW = float(os.getenv("DRIFT_SHIFT_SEV_LOW", "0.03"))
 SHIFT_SEV_HIGH = float(os.getenv("DRIFT_SHIFT_SEV_HIGH", "0.07"))
+MIN_CHARS = int(os.getenv("MLOPS_MIN_CHARS", "1000")) # 最小１０００文字で学習開始　短い音声避ける
+
 
 # ----------------- ユーティリティ -----------------
 
@@ -59,61 +61,59 @@ def _safe_vec(b: Optional[bytes]) -> Optional[np.ndarray]:
         return a if a.size > 0 else None
     except Exception:
         return None
+    
+# created_at があれば最優先。無ければ timestamp を使う
+def _time_col():
+    return getattr(models.Conversation, "created_at", None) or getattr(models.Conversation, "timestamp", None)
 
-#  created_at があれば期間フィルタで、なければ　全件（参照）及び最新N件（直近）
-def _has_created_at() -> bool:
-    return hasattr(models.Conversation, "created_at")
-
-# 現在日時からサービス開始時の間の全件を参照（1000文字未満除外という例外はある）
+# timestamp を使えるようヘルパー差し替えて、1000文字未満除外を追加
 def _fetch_reference_rows(db: Session, days: int) -> List[models.Conversation]:
-    if _has_created_at():
+    col = _time_col()
+    q = db.query(models.Conversation)
+    if col is not None:
         since = datetime.utcnow() - timedelta(days=days)
-        return db.query(models.Conversation)\
-                 .filter(models.Conversation.created_at >= since).all()
-    return db.query(models.Conversation).all()
+        q = q.filter(col >= since)
+    return q.all()
 
+# timestamp を使えるようヘルパー差し替えて、1000文字未満除外を追加
 def _fetch_recent_rows(db: Session, hours: int, recent_n: int = 200) -> List[models.Conversation]:
-    if _has_created_at():
+    col = _time_col()
+    q = db.query(models.Conversation)
+    if col is not None:
         since = datetime.utcnow() - timedelta(hours=hours)
-        return (
-            db.query(models.Conversation)
-            .filter(models.Conversation.created_at >= since)
-            .all()
-        )
-    # created_at が無い場合は最近N件を近似として使用 デフォルト200件
-    return (
-        db.query(models.Conversation)
-        .order_by(models.Conversation.id.desc())
-        .limit(recent_n)
-        .all()
-    )
+        q = q.filter(col >= since)
+        return q.all()
+    return q.order_by(models.Conversation.id.desc()).limit(recent_n).all()
 
 # ----------- 特徴抽出（数値） -----------
 
 _LATIN_RE = re.compile(r"[A-Za-z0-9]")  # 日本語は False 英数字のみ True 大体の英語率測定
 
 # messageの長さと、英数字率を配列で返す定義　直感的に一番有用そうなPSIの指標なので導入
+# _text_stats / _emb_matrixが1000文字未満弾くように
 def _text_stats(rows: List[models.Conversation]) -> Dict[str, np.ndarray]:
     lens, latin_ratio = [], []
     for r in rows:
         t = (r.message or "").strip()
-        if not t:
+        if not t or len(t) < MIN_CHARS:
             continue
         lens.append(len(t))
         latin = sum(1 for ch in t if _LATIN_RE.match(ch))
         latin_ratio.append(latin / max(1, len(t)))
-    return {
-        "len": np.asarray(lens, dtype=np.float32),
-        "latin_ratio": np.asarray(latin_ratio, dtype=np.float32),
-    }
+    return {"len": np.asarray(lens, dtype=np.float32), "latin_ratio": np.asarray(latin_ratio, dtype=np.float32)}
 
 # 結果（rows） の embedding を集めて行列化　意味的なズレをPSIで測定するための整理
 def _emb_matrix(rows: List[models.Conversation]) -> np.ndarray:
     emb = []
     for r in rows:
+        t = (r.message or "").strip()
+        if not t or len(t) < MIN_CHARS:
+            continue
         v = _safe_vec(getattr(r, "embedding", None))
-        if v is not None: emb.append(v)
+        if v is not None:
+            emb.append(v)
     return np.asarray(emb, dtype=np.float32)
+
 
 # ----------- 指標計算 -----------
 
